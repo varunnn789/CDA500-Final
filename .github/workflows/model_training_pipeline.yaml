@@ -21,7 +21,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements_final.txt # Install dependencies from requirements_final.txt
+          pip install -r requirements.txt # Install dependencies from requirements_final.txt
 
       - name: Train or retrain models on new data
         env:

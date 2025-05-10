@@ -21,7 +21,7 @@ jobs:
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements_final.txt # Install dependencies from requirements_final.txt
+          pip install -r requirements.txt # Install dependencies from requirements_final.txt
 
       - name: Run inference pipeline to generate predictions and load to Hopsworks
         env:
