@@ -14,7 +14,7 @@ parent_dir = str(Path(__file__).parent.parent)
 sys.path.append(parent_dir)
 
 from src.config import DATA_DIR
-from src.inference import get_feature_store
+from src.inference import get_feature_store, fetch_next_hour_predictions
 
 # Function to convert UTC time to EST
 def convert_to_est(utc_time):
