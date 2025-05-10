@@ -26,4 +26,4 @@ jobs:
       - name: Run inference pipeline to generate predictions and load to Hopsworks
         env:
           HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY}}
-        run: python -m src.inference_pipeline
+        run: python -m pipelines.inference_pipeline
