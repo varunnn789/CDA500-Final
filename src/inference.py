@@ -1,8 +1,9 @@
 from datetime import datetime, timedelta, timezone
-import pytz
+
 import hopsworks
 import numpy as np
 import pandas as pd
+import pytz
 from hsfs.feature_store import FeatureStore
 from sklearn.feature_selection import SelectKBest, f_regression
 
@@ -190,17 +191,16 @@ def fetch_next_hour_predictions(feature_group_name):
         raise ValueError(f"Feature group {feature_group_name} not found in the feature store.")
     df = fg.read()
     if df.empty:
-        return df
-    # Sort by pickup_hour in descending order and take the most recent predictions
-    df = df.sort_values("pickup_hour", ascending=False)
-    most_recent_hour = df["pickup_hour"].iloc[0]
-    df = df[df["pickup_hour"] == most_recent_hour]
-
-    print(f"Current UTC time: {now}")
-    print(f"Expected next hour: {next_hour}")
-    print(f"Most recent prediction hour: {most_recent_hour}")
-    print(f"Found {len(df)} records for {feature_group_name}")
-    return df
+        return df, None
+    # Filter for the exact next hour
+    df_next = df[df["pickup_hour"] == next_hour]
+    if df_next.empty:
+        # If no predictions for the next hour, fall back to the most recent
+        df = df.sort_values("pickup_hour", ascending=False)
+        most_recent_hour = df["pickup_hour"].iloc[0]
+        df_next = df[df["pickup_hour"] == most_recent_hour]
+        return df_next, most_recent_hour
+    return df_next, next_hour
 
 def fetch_predictions(hours, feature_group_name):
     current_hour = (pd.Timestamp.now(tz="Etc/UTC") - timedelta(hours=hours)).floor("h")

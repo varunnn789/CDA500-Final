@@ -12,7 +12,7 @@ parent_dir = str(Path(__file__).parent.parent)
 sys.path.append(parent_dir)
 
 from src.config import DATA_DIR
-from src.inference import get_feature_store, fetch_next_hour_predictions
+from src.inference import get_feature_store, fetch_next_hour_predictions, fetch_hourly_rides, fetch_predictions
 
 # Function to convert UTC time to EST
 def convert_to_est(utc_time):
@@ -91,25 +91,43 @@ with st.sidebar:
     if st.button("Remove Station Filter"):
         selected_station = "All Stations"
 
-# Fetch predictions for the selected model
+# Fetch next-hour predictions for the selected model
 with st.spinner(f"Fetching predictions for {selected_model}..."):
-    predictions = fetch_next_hour_predictions(feature_group_name)
+    predictions, prediction_time = fetch_next_hour_predictions(feature_group_name)
     if predictions is not None and not predictions.empty:
         predictions['pickup_hour'] = predictions['pickup_hour'].apply(convert_to_est)
         predictions['pickup_hour'] = predictions['pickup_hour'].dt.strftime('%Y-%m-%d %H:%M:%S')
+        prediction_time = convert_to_est(prediction_time).strftime('%Y-%m-%d %H:%M:%S')
     else:
         st.warning("No predictions available for the selected time.")
         predictions = pd.DataFrame()
+        prediction_time = None
 
-# Filter predictions based on the selected station
+# Fetch historical data (previous 2 weeks)
+historical_hours = 24 * 14  # 2 weeks = 14 days = 336 hours
+with st.spinner(f"Fetching historical data for the past 2 weeks..."):
+    df_actual = fetch_hourly_rides(historical_hours)
+    df_pred = fetch_predictions(historical_hours, feature_group_name)
+
+    df_actual['pickup_hour'] = df_actual['pickup_hour'].apply(convert_to_est)
+    df_pred['pickup_hour'] = df_pred['pickup_hour'].apply(convert_to_est)
+
+# Merge historical actual and predicted data
+historical_data = pd.merge(df_actual, df_pred, on=["start_station_name", "pickup_hour"], how="left")
+historical_data['pickup_hour'] = historical_data['pickup_hour'].dt.strftime('%Y-%m-%d %H:%M:%S')
+
+# Filter predictions and historical data based on the selected station
 if selected_station != "All Stations":
     filtered_predictions = predictions[predictions['start_station_name'] == selected_station].copy()
+    filtered_historical = historical_data[historical_data['start_station_name'] == selected_station].copy()
 else:
     filtered_predictions = predictions.copy()
+    filtered_historical = historical_data.copy()
 
 # Display prediction statistics
 if not filtered_predictions.empty:
     st.subheader("Prediction Statistics")
+    st.write(f"Prediction Time: {prediction_time} EST")
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("Average Predicted Rides", f"{filtered_predictions['predicted_rides'].mean():.0f}")
@@ -120,43 +138,55 @@ if not filtered_predictions.empty:
 
     st.dataframe(filtered_predictions[["start_station_name", "predicted_rides"]])
 
-    st.subheader("Predicted Demand for Top Stations")
+    st.subheader("Predicted vs Actual Demand Over Past 2 Weeks")
     if selected_station == "All Stations":
         top_stations = filtered_predictions.sort_values("predicted_rides", ascending=False).head(2)
         for _, row in top_stations.iterrows():
             station_name = row["start_station_name"]
-            location_data = filtered_predictions[filtered_predictions["start_station_name"] == station_name].copy()
+            location_historical = filtered_historical[filtered_historical["start_station_name"] == station_name].copy()
+            location_pred = filtered_predictions[filtered_predictions["start_station_name"] == station_name].copy()
+            
+            # Plot historical actual and predicted rides
             fig = px.line(
-                location_data,
+                location_historical,
                 x='pickup_hour',
-                y='predicted_rides',
-                title=f"Station: {station_name}, Pickup Hour: {location_data['pickup_hour'].iloc[-1]}",
-                labels={'pickup_hour': 'Time (EST)', 'predicted_rides': 'Predicted Rides'}
+                y=['rides', 'predicted_rides'],
+                title=f"Station: {station_name}",
+                labels={'pickup_hour': 'Time (EST)', 'value': 'Rides', 'variable': 'Data Type'},
+                line_shape='linear'
             )
-            fig.add_trace(go.Scatter(
-                x=[location_data['pickup_hour'].iloc[-1]],
-                y=[location_data['predicted_rides'].iloc[-1]],
-                mode='markers',
-                marker=dict(color='red', symbol='x', size=10),
-                name='Prediction'
-            ))
+            # Add marker for the most recent prediction
+            if not location_pred.empty:
+                fig.add_trace(go.Scatter(
+                    x=[location_pred['pickup_hour'].iloc[-1]],
+                    y=[location_pred['predicted_rides'].iloc[-1]],
+                    mode='markers',
+                    marker=dict(color='red', symbol='x', size=10),
+                    name='Next Hour Prediction'
+                ))
             st.plotly_chart(fig, theme="streamlit", use_container_width=True)
     else:
-        location_data = filtered_predictions[filtered_predictions["start_station_name"] == selected_station].copy()
+        location_historical = filtered_historical[filtered_historical["start_station_name"] == selected_station].copy()
+        location_pred = filtered_predictions[filtered_predictions["start_station_name"] == selected_station].copy()
+        
+        # Plot historical actual and predicted rides
         fig = px.line(
-            location_data,
+            location_historical,
             x='pickup_hour',
-            y='predicted_rides',
-            title=f"Station: {selected_station}, Pickup Hour: {location_data['pickup_hour'].iloc[-1]}",
-            labels={'pickup_hour': 'Time (EST)', 'predicted_rides': 'Predicted Rides'}
+            y=['rides', 'predicted_rides'],
+            title=f"Station: {selected_station}",
+            labels={'pickup_hour': 'Time (EST)', 'value': 'Rides', 'variable': 'Data Type'},
+            line_shape='linear'
         )
-        fig.add_trace(go.Scatter(
-            x=[location_data['pickup_hour'].iloc[-1]],
-            y=[location_data['predicted_rides'].iloc[-1]],
-            mode='markers',
-            marker=dict(color='red', symbol='x', size=10),
-            name='Prediction'
-        ))
+        # Add marker for the most recent prediction
+        if not location_pred.empty:
+            fig.add_trace(go.Scatter(
+                x=[location_pred['pickup_hour'].iloc[-1]],
+                y=[location_pred['predicted_rides'].iloc[-1]],
+                mode='markers',
+                marker=dict(color='red', symbol='x', size=10),
+                name='Next Hour Prediction'
+            ))
         st.plotly_chart(fig, theme="streamlit", use_container_width=True)
 
     # Top 10 stations
