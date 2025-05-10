@@ -26,7 +26,7 @@ class BaselineModelPreviousHour:
     def predict(self, X_test: pd.DataFrame) -> np.array:
         return X_test["rides_t-1"]
 
-def get_model_predictions(model, features: pd.DataFrame, model_name: str) -> pd.DataFrame:
+def get_model_predictions(model, features: pd.DataFrame, numeric_features: pd.DataFrame, model_name: str) -> pd.DataFrame:
     # Preprocess features based on the model
     if model_name == "baseline_previous_hour":
         # Baseline model only needs rides_t-1
@@ -36,27 +36,27 @@ def get_model_predictions(model, features: pd.DataFrame, model_name: str) -> pd.
 
     elif model_name == "lightgbm_28days_lags":
         # LightGBM 28 Days Lags uses all 672 lagged features
-        past_ride_columns = [c for c in features.columns if c.startswith("rides_")]
+        past_ride_columns = [c for c in numeric_features.columns if c.startswith("rides_")]
         if len(past_ride_columns) != 672:
             raise ValueError(f"Expected 672 lagged features, found {len(past_ride_columns)}")
-        features_model = features[past_ride_columns]
+        features_model = numeric_features[past_ride_columns]
         predictions = model.predict(features_model)
 
     elif model_name == "lightgbm_top10_features":
         # LightGBM Top 10 Features uses the same 10 features selected during training
         # We need to apply the same feature selection (this is a simplification; ideally, we should save the selector)
         selector = SelectKBest(score_func=f_regression, k=10)
-        past_ride_columns = [c for c in features.columns if c.startswith("rides_")]
+        past_ride_columns = [c for c in numeric_features.columns if c.startswith("rides_")]
         # For simplicity, we assume the same features are selected (in practice, we should save the selector)
         selected_features = ['rides_t-672', 'rides_t-504', 'rides_t-360', 'rides_t-336', 'rides_t-312',
                             'rides_t-192', 'rides_t-168', 'rides_t-144', 'rides_t-24', 'rides_t-1']
-        features_model = features[selected_features]
+        features_model = numeric_features[selected_features]
         predictions = model.predict(features_model)
 
     elif model_name == "gradient_boosting_temporal_features":
         # Gradient Boosting uses lagged features + temporal features
-        past_ride_columns = [c for c in features.columns if c.startswith("rides_")]
-        features_model = features[past_ride_columns].copy()
+        past_ride_columns = [c for c in numeric_features.columns if c.startswith("rides_")]
+        features_model = numeric_features[past_ride_columns].copy()
         features_model["hour"] = features["pickup_hour"].dt.hour
         features_model["day_of_week"] = features["pickup_hour"].dt.dayofweek
         features_model["month"] = features["pickup_hour"].dt.month
@@ -65,8 +65,8 @@ def get_model_predictions(model, features: pd.DataFrame, model_name: str) -> pd.
     elif model_name == "lightgbm_enhanced_lags_cyclic_temporal_interactions":
         # LightGBM Enhanced uses 7 days of lags + engineered features
         lag_columns_7_days = [f"rides_t-{i}" for i in range(1, 7*24 + 1)]
-        lag_columns_7_days = [col for col in lag_columns_7_days if col in features.columns]
-        features_model = features[lag_columns_7_days].copy()
+        lag_columns_7_days = [col for col in lag_columns_7_days if col in numeric_features.columns]
+        features_model = numeric_features[lag_columns_7_days].copy()
         features_model["hour"] = features["pickup_hour"].dt.hour
         features_model["day_of_week"] = features["pickup_hour"].dt.dayofweek
         features_model["month"] = features["pickup_hour"].dt.month
@@ -118,7 +118,7 @@ def load_batch_of_features_from_store(
         )
         print(f"Feature view 'citi_bike_recent_hourly_feature_view' (version 1) created successfully.")
     except Exception as e:
-        print(f"Error creating feature view: {e}")
+        print(f"Feature view creation skipped: {e}")
 
     feature_view = feature_store.get_feature_view(
         name="citi_bike_recent_hourly_feature_view",
@@ -179,29 +179,33 @@ def load_metrics_from_registry(model_name=None):
 
     return model.training_metrics
 
-def fetch_next_hour_predictions():
+def fetch_next_hour_predictions(feature_group_name):
     # Get current UTC time and round up to next hour
-    now = datetime.now(timezone.utc)
+    now = datetime.now(tz=pytz.UTC)
     next_hour = (now + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
 
     fs = get_feature_store()
-    fg = fs.get_feature_group(name=config.FEATURE_GROUP_MODEL_PREDICTION, version=1)
+    fg = fs.get_feature_group(name=feature_group_name, version=1)
+    if fg is None:
+        raise ValueError(f"Feature group {feature_group_name} not found in the feature store.")
     df = fg.read()
     # Then filter for next hour in the DataFrame
     df = df[df["pickup_hour"] == next_hour]
 
     print(f"Current UTC time: {now}")
     print(f"Next hour: {next_hour}")
-    print(f"Found {len(df)} records")
+    print(f"Found {len(df)} records for {feature_group_name}")
     return df
 
-def fetch_predictions(hours):
+def fetch_predictions(hours, feature_group_name):
     current_hour = (pd.Timestamp.now(tz="Etc/UTC") - timedelta(hours=hours)).floor("h")
 
     fs = get_feature_store()
-    fg = fs.get_feature_group(name=config.FEATURE_GROUP_MODEL_PREDICTION, version=1)
+    fg = fs.get_feature_group(name=feature_group_name, version=1)
+    if fg is None:
+        raise ValueError(f"Feature group {feature_group_name} not found in the feature store.")
 
-    df = fg.filter((fg.pickup_hour >= current_hour)).read()
+    df = fg.filter(fg.pickup_hour >= current_hour).read()
 
     return df
 

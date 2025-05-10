@@ -1,26 +1,20 @@
 import sys
 from pathlib import Path
-import zipfile
 import os
 import folium
-import geopandas as gpd
 import pandas as pd
-import requests
 import streamlit as st
-from branca.colormap import LinearColormap
 from streamlit_folium import st_folium
-from datetime import datetime
+from datetime import datetime, timedelta
 import pytz
-import plotly.graph_objs as go
 import plotly.express as px
+import plotly.graph_objs as go
 
 parent_dir = str(Path(__file__).parent.parent)
 sys.path.append(parent_dir)
-os.environ['SHAPE_RESTORE_SHX'] = 'YES'
 
 from src.config import DATA_DIR
-from src.inference import fetch_next_hour_predictions, load_batch_of_features_from_store
-from src.plot_utils import plot_prediction
+from src.inference import get_feature_store
 
 # Function to convert UTC time to EST
 def convert_to_est(utc_time):
@@ -29,127 +23,76 @@ def convert_to_est(utc_time):
         utc_time = pytz.utc.localize(utc_time)
     return utc_time.astimezone(est_tz)
 
-if "map_created" not in st.session_state:
-    st.session_state.map_created = False
+# Function to fetch station coordinates (assumed to be in a static file or feature store)
+def fetch_station_coordinates():
+    # Placeholder: Fetch coordinates from a static file or feature store
+    try:
+        # Example: Load from a static CSV file in DATA_DIR
+        stations_file = DATA_DIR / "citi_bike_stations.csv"
+        if stations_file.exists():
+            stations_df = pd.read_csv(stations_file)
+            return stations_df[["start_station_name", "latitude", "longitude"]]
+        else:
+            # Fallback: Fetch from feature store
+            fs = get_feature_store()
+            fg = fs.get_feature_group(name="recent_time_series_hourly_feature_group", version=1)
+            df = fg.read()
+            if "latitude" in df.columns and "longitude" in df.columns:
+                stations_df = df[["start_station_name", "latitude", "longitude"]].drop_duplicates()
+                return stations_df
+            else:
+                raise ValueError("Station coordinates not found in feature store or static file.")
+    except Exception as e:
+        st.error(f"Error fetching station coordinates: {e}")
+        return None
 
-def create_taxi_map(shapefile_path, prediction_data, selected_location=None):
-    nyc_zones = gpd.read_file(shapefile_path)
-    nyc_zones = nyc_zones.merge(
-        prediction_data[["pickup_location_id", "predicted_demand"]],
-        left_on="LocationID",
-        right_on="pickup_location_id",
+# Function to create a map with station markers colored by predicted rides
+def create_bike_map(predictions, stations_df, selected_station=None):
+    if stations_df is None or stations_df.empty:
+        return None
+
+    # Merge predictions with station coordinates
+    merged_df = pd.merge(
+        predictions[["start_station_name", "predicted_rides"]],
+        stations_df,
+        on="start_station_name",
         how="left"
     )
-    nyc_zones["predicted_demand"] = nyc_zones["predicted_demand"].fillna(0)
-    nyc_zones = nyc_zones.to_crs(epsg=4326)
+    merged_df = merged_df.dropna(subset=["latitude", "longitude"])  # Drop stations without coordinates
+    merged_df["predicted_rides"] = merged_df["predicted_rides"].fillna(0)
 
-    m = folium.Map(location=[40.7128, -74.0060], zoom_start=10, tiles="cartodbpositron")
-    colormap = LinearColormap(
-        colors=["#FFEDA0", "#FED976", "#FEB24C", "#FD8D3C", "#FC4E2A", "#E31A1C", "#BD0026"],
-        vmin=nyc_zones["predicted_demand"].min(),
-        vmax=nyc_zones["predicted_demand"].max()
-    )
-    colormap.add_to(m)
+    # Create a Folium map centered on NYC
+    m = folium.Map(location=[40.7128, -74.0060], zoom_start=12, tiles="cartodbpositron")
 
-    def style_function(feature):
-        location_id = feature['properties']['LocationID']
-        fill_color = colormap(float(feature["properties"].get("predicted_demand", 0)))
+    # Create a color scale for predicted rides
+    min_rides = merged_df["predicted_rides"].min()
+    max_rides = merged_df["predicted_rides"].max()
+    if max_rides == min_rides:
+        max_rides = min_rides + 1  # Avoid division by zero
+    color_scale = lambda x: f"#{int(255 * (x - min_rides) / (max_rides - min_rides)):02x}00{int(255 * (1 - (x - min_rides) / (max_rides - min_rides))):02x}"
 
-        # Highlight the selected location
-        if selected_location is not None and location_id == selected_location:
-            return {
-                "fillColor": fill_color,
-                "color": "green",  # Highlight color
-                "weight": 3,         # Thicker border
-                "fillOpacity": 0.9,   # More opaque
-            }
-        else:
-            return {
-                "fillColor": fill_color,
-                "color": "black",
-                "weight": 1,
-                "fillOpacity": 0.7,
-            }
+    # Add markers for each station
+    for _, row in merged_df.iterrows():
+        station_name = row["start_station_name"]
+        predicted_rides = row["predicted_rides"]
+        lat = row["latitude"]
+        lon = row["longitude"]
+        color = color_scale(predicted_rides)
+        border_color = "green" if selected_station == station_name else "black"
+        border_weight = 3 if selected_station == station_name else 1
 
+        folium.CircleMarker(
+            location=[lat, lon],
+            radius=8,
+            color=border_color,
+            weight=border_weight,
+            fill=True,
+            fill_color=color,
+            fill_opacity=0.7,
+            tooltip=f"Station: {station_name}<br>Predicted Rides: {predicted_rides:.0f}",
+        ).add_to(m)
 
-    zones_json = nyc_zones.to_json()
-    folium.GeoJson(
-        zones_json,
-        style_function=style_function,
-        tooltip=folium.GeoJsonTooltip(
-            fields=["zone", "predicted_demand"],
-            aliases=["Zone:", "Predicted Demand:"],
-            style="background-color: white; color: #333333; font-family: arial; font-size: 12px; padding: 10px;"
-        )
-    ).add_to(m)
-
-    st.session_state.map_obj = m
-    st.session_state.map_created = True
     return m
-
-def load_shape_data_file(data_dir, url="https://d37ci6vzurychx.cloudfront.net/misc/taxi_zones.zip", log=True):
-    """
-    Downloads, extracts, and loads a shapefile as a GeoDataFrame.
-
-    Parameters:
-        data_dir (str or Path): Directory where the data will be stored.
-        url (str): URL of the shapefile zip file.
-        log (bool): Whether to log progress messages.
-
-    Returns:
-        GeoDataFrame: The loaded shapefile as a GeoDataFrame.
-    """
-    # Ensure data directory exists
-    data_dir = Path(data_dir)
-    data_dir.mkdir(parents=True, exist_ok=True)
-
-    # Define file paths
-    zip_path = data_dir / "taxi_zones.zip"
-    extract_path = data_dir / "taxi_zones"
-    shapefile_path = extract_path / "taxi_zones.shp"
-
-    # Download the file if it doesn't already exist
-    if not zip_path.exists():
-        if log:
-            print(f"Downloading file from {url}...")
-        try:
-            response = requests.get(url, timeout=10)
-            response.raise_for_status()  # Raise an HTTPError for bad responses
-            with open(zip_path, "wb") as f:
-                f.write(response.content)
-            if log:
-                print(f"File downloaded and saved to {zip_path}")
-        except requests.exceptions.RequestException as e:
-            raise Exception(f"Failed to download file from {url}: {e}")
-    else:
-        if log:
-            print(f"File already exists at {zip_path}, skipping download.")
-
-    # Extract the zip file if the shapefile doesn't already exist
-    if not shapefile_path.exists():
-        if log:
-            print(f"Extracting files to {extract_path}...")
-        try:
-            with zipfile.ZipFile(zip_path, "r") as zip_ref:
-                zip_ref.extractall(extract_path)
-            if log:
-                print(f"Files extracted to {extract_path}")
-        except zipfile.BadZipFile as e:
-            raise Exception(f"Failed to extract zip file {zip_path}: {e}")
-    else:
-        if log:
-            print(f"Shapefile already exists at {shapefile_path}, skipping extraction.")
-
-    # Load and return the shapefile as a GeoDataFrame
-    if log:
-        print(f"Loading shapefile from {shapefile_path}...")
-    try:
-        gdf = gpd.read_file(shapefile_path).to_crs("epsg:4326")
-        if log:
-            print("Shapefile successfully loaded.")
-        return gdf
-    except Exception as e:
-        raise Exception(f"Failed to load shapefile {shapefile_path}: {e}")
 
 # Custom CSS for beautification
 st.markdown("""
@@ -182,105 +125,128 @@ st.markdown("""
 current_date = pd.Timestamp.now(tz="Etc/UTC")
 current_date_est = convert_to_est(current_date)
 
-st.title(f"New York Yellow Taxi Cab Demand Next Hour")
+st.title("Citi Bike Demand Prediction - Next Hour")
 st.header(f'{current_date_est.strftime("%Y-%m-%d %H:%M:%S")} EST')
 
-with st.spinner(text="Download shape file for taxi zones"):
-    geo_df = load_shape_data_file(DATA_DIR)
+# Define the list of models and corresponding feature group names
+models = [
+    "baseline_previous_hour",
+    "lightgbm_28days_lags",
+    "lightgbm_top10_features",
+    "gradient_boosting_temporal_features",
+    "lightgbm_enhanced_lags_cyclic_temporal_interactions"
+]
 
-with st.spinner(text="Fetching batch of inference data"):
-    features = load_batch_of_features_from_store(current_date)
-    if 'pickup_hour' in features.columns:
-        features['pickup_hour'] = features['pickup_hour'].apply(convert_to_est)
-        features['pickup_hour'] = features['pickup_hour'].dt.strftime('%Y-%m-%d %H:%M:%S')
+prediction_feature_groups = {
+    "baseline_previous_hour": "predictions_model_baseline",
+    "lightgbm_28days_lags": "predictions_model_lgbm_28days",
+    "lightgbm_top10_features": "predictions_model_lgbm_top10",
+    "gradient_boosting_temporal_features": "predictions_model_gbt",
+    "lightgbm_enhanced_lags_cyclic_temporal_interactions": "predictions_model_lgbm_enhanced"
+}
 
-with st.spinner(text="Fetching predictions"):
-    predictions = fetch_next_hour_predictions()
-    if 'pickup_hour' in predictions.columns:
+# Sidebar: Model and station selection
+with st.sidebar:
+    st.header("Settings")
+    selected_model = st.selectbox("Select Model:", models, index=0)
+    feature_group_name = prediction_feature_groups[selected_model]
+
+    # Fetch stations for selection
+    with st.spinner("Fetching station data..."):
+        stations_df = fetch_station_coordinates()
+        if stations_df is not None:
+            stations = sorted(stations_df["start_station_name"].unique())
+        else:
+            stations = []
+
+    selected_station = st.selectbox("Select a Station:", ["All Stations"] + stations)
+
+    # Button to remove station filter
+    if st.button("Remove Station Filter"):
+        selected_station = "All Stations"
+
+# Fetch predictions for the selected model
+with st.spinner(f"Fetching predictions for {selected_model}..."):
+    predictions = fetch_next_hour_predictions(feature_group_name)
+    if predictions is not None and not predictions.empty:
         predictions['pickup_hour'] = predictions['pickup_hour'].apply(convert_to_est)
         predictions['pickup_hour'] = predictions['pickup_hour'].dt.strftime('%Y-%m-%d %H:%M:%S')
+    else:
+        st.warning("No predictions available for the next hour.")
+        predictions = pd.DataFrame()
 
-    # Merge zone names with predictions
-    predictions = pd.merge(
-        predictions,
-        geo_df[["LocationID", "zone"]],
-        left_on="pickup_location_id",
-        right_on="LocationID",
-        how="left",
-    )
-
-shapefile_path = DATA_DIR / "taxi_zones" / "taxi_zones.shp"
-
-# Sidebar: Location selection
-with st.sidebar:
-    locations = sorted(predictions['pickup_location_id'].unique())
-    selected_location = st.selectbox("Select a location:", locations)
-    
-    # Button to remove dropdown filter
-    if st.button("Remove Dropdown Filter"):
-        selected_location = None
-
-# Filter data based on the selected location
-if selected_location:
-    filtered_predictions = predictions[predictions['pickup_location_id'] == selected_location].copy()
-    filtered_features = features[features['pickup_location_id'] == selected_location].copy()
+# Filter predictions based on the selected station
+if selected_station != "All Stations":
+    filtered_predictions = predictions[predictions['start_station_name'] == selected_station].copy()
 else:
     filtered_predictions = predictions.copy()
-    filtered_features = features.copy()
 
-with st.spinner(text="Plot predicted rides demand"):
-    if predictions is None or predictions.empty:
-        st.warning("No prediction data available.")
+# Display map
+if stations_df is not None and not filtered_predictions.empty:
+    st.subheader("Citi Bike Demand Predictions Map")
+    map_obj = create_bike_map(filtered_predictions, stations_df, selected_station if selected_station != "All Stations" else None)
+    if map_obj:
+        st_folium(map_obj, width=800, height=600, returned_objects=[])
     else:
-        st.subheader("Taxi Ride Predictions Map")
-        map_obj = create_taxi_map(shapefile_path, predictions, selected_location)
+        st.warning("Unable to display map due to missing station coordinates.")
+else:
+    st.warning("Map cannot be displayed: No predictions or station coordinates available.")
 
-        if st.session_state.map_created:
-            st_folium(st.session_state.map_obj, width=800, height=600, returned_objects=[])
+# Display prediction statistics
+if not filtered_predictions.empty:
+    st.subheader("Prediction Statistics")
+    col1, col2, col3 = st.columns(3)
+    with col1:
+        st.metric("Average Predicted Rides", f"{filtered_predictions['predicted_rides'].mean():.0f}")
+    with col2:
+        st.metric("Maximum Predicted Rides", f"{filtered_predictions['predicted_rides'].max():.0f}")
+    with col3:
+        st.metric("Minimum Predicted Rides", f"{filtered_predictions['predicted_rides'].min():.0f}")
 
-        st.subheader("Prediction Statistics")
-        col1, col2, col3 = st.columns(3)
-        with col1:
-            st.metric("Average Rides", f"{filtered_predictions['predicted_demand'].mean():.0f}")
-        with col2:
-            st.metric("Maximum Rides", f"{filtered_predictions['predicted_demand'].max():.0f}")
-        with col3:
-            st.metric("Minimum Rides", f"{filtered_predictions['predicted_demand'].min():.0f}")
+    st.dataframe(filtered_predictions[["start_station_name", "predicted_rides"]])
 
-        st.dataframe(filtered_predictions[["pickup_location_id", "predicted_demand"]]) #Table with all predictions, removed Zone
-
-        st.subheader("Time Series for Top Locations")
-
-        # Default chart: Time series for the top 2 locations
-        if not selected_location:
-            top2_location_ids = filtered_predictions.sort_values("predicted_demand", ascending=False).head(2)["pickup_location_id"].to_list()
-            for location_id in top2_location_ids:
-                location_data = filtered_predictions[filtered_predictions["pickup_location_id"] == location_id].copy()
-
-                fig = px.line(location_data, x='pickup_hour', y='predicted_demand',
-                              title=f"Pickup Hour: {location_data['pickup_hour'].iloc[-1]}, Location ID: {location_id}",
-                              labels={'pickup_hour': 'Time', 'predicted_demand': 'Ride Counts'})
-                fig.add_trace(go.Scatter(x=[location_data['pickup_hour'].iloc[-1]],
-                                         y=[location_data['predicted_demand'].iloc[-1]],
-                                         mode='markers', marker=dict(color='red', symbol='x', size=10),
-                                         name='Prediction'))
-
-                st.plotly_chart(fig, theme="streamlit", use_container_width=True)
-        else:
-            # Time series plot for the selected location
-            location_data = filtered_predictions[filtered_predictions["pickup_location_id"] == selected_location].copy()
-            fig = px.line(location_data, x='pickup_hour', y='predicted_demand',
-                          title=f"Pickup Hour: {location_data['pickup_hour'].iloc[-1]}, Location ID: {selected_location}",
-                          labels={'pickup_hour': 'Time', 'predicted_demand': 'Ride Counts'})
-            fig.add_trace(go.Scatter(x=[location_data['pickup_hour'].iloc[-1]],
-                                     y=[location_data['predicted_demand'].iloc[-1]],
-                                     mode='markers', marker=dict(color='red', symbol='x', size=10),
-                                     name='Prediction'))
-
+    st.subheader("Predicted Demand for Top Stations")
+    if selected_station == "All Stations":
+        top_stations = filtered_predictions.sort_values("predicted_rides", ascending=False).head(2)
+        for _, row in top_stations.iterrows():
+            station_name = row["start_station_name"]
+            location_data = filtered_predictions[filtered_predictions["start_station_name"] == station_name].copy()
+            fig = px.line(
+                location_data,
+                x='pickup_hour',
+                y='predicted_rides',
+                title=f"Station: {station_name}, Pickup Hour: {location_data['pickup_hour'].iloc[-1]}",
+                labels={'pickup_hour': 'Time (EST)', 'predicted_rides': 'Predicted Rides'}
+            )
+            fig.add_trace(go.Scatter(
+                x=[location_data['pickup_hour'].iloc[-1]],
+                y=[location_data['predicted_rides'].iloc[-1]],
+                mode='markers',
+                marker=dict(color='red', symbol='x', size=10),
+                name='Prediction'
+            ))
             st.plotly_chart(fig, theme="streamlit", use_container_width=True)
+    else:
+        location_data = filtered_predictions[filtered_predictions["start_station_name"] == selected_station].copy()
+        fig = px.line(
+            location_data,
+            x='pickup_hour',
+            y='predicted_rides',
+            title=f"Station: {selected_station}, Pickup Hour: {location_data['pickup_hour'].iloc[-1]}",
+            labels={'pickup_hour': 'Time (EST)', 'predicted_rides': 'Predicted Rides'}
+        )
+        fig.add_trace(go.Scatter(
+            x=[location_data['pickup_hour'].iloc[-1]],
+            y=[location_data['predicted_rides'].iloc[-1]],
+            mode='markers',
+            marker=dict(color='red', symbol='x', size=10),
+            name='Prediction'
+        ))
+        st.plotly_chart(fig, theme="streamlit", use_container_width=True)
 
-        # Add name column for top 10 pickup locations
-        top10 = filtered_predictions.sort_values("predicted_demand", ascending=False).head(10)
-        top10 = top10.rename(columns={"zone": "Location Name"})  # Rename 'zone' column to 'Location Name'
-        st.subheader("Top 10 Pickup Locations")
-        st.dataframe(top10[["pickup_location_id", "Location Name", "predicted_demand"]])
+    # Top 10 stations
+    top10 = filtered_predictions.sort_values("predicted_rides", ascending=False).head(10)
+    st.subheader("Top 10 Stations by Predicted Rides")
+    st.dataframe(top10[["start_station_name", "predicted_rides"]])
+else:
+    st.warning("No predictions available to display.")
