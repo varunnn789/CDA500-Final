@@ -192,15 +192,11 @@ def fetch_next_hour_predictions(feature_group_name):
     df = fg.read()
     if df.empty:
         return df, None
-    # Filter for the exact next hour
-    df_next = df[df["pickup_hour"] == next_hour]
-    if df_next.empty:
-        # Fall back to the most recent predictions for presentation
-        df = df.sort_values("pickup_hour", ascending=False)
-        most_recent_hour = df["pickup_hour"].iloc[0]
-        df_next = df[df["pickup_hour"] == most_recent_hour]
-        return df_next, most_recent_hour
-    return df_next, next_hour
+    # Since pipeline saves predictions for recent_hour, fetch the most recent predictions
+    df = df.sort_values("pickup_hour", ascending=False)
+    most_recent_hour = df["pickup_hour"].iloc[0]
+    df_next = df[df["pickup_hour"] == most_recent_hour]
+    return df_next, most_recent_hour
 
 def fetch_predictions(hours, feature_group_name):
     current_hour = (pd.Timestamp.now(tz="Etc/UTC") - timedelta(hours=hours)).floor("h")

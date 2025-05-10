@@ -7,7 +7,7 @@ from src.inference import (
     get_feature_store,
     get_model_predictions,
     load_model_from_registry,
-    BaselineModelPreviousHour,  # Added missing import
+    BaselineModelPreviousHour,
 )
 
 # Get the current datetime
@@ -76,9 +76,8 @@ for model_name in models:
     
     # Make predictions for the most recent hour
     predictions = get_model_predictions(model, features_next_hour, features_for_model, model_name=model_name)
-    # Set pickup_hour to the next hour after the current time
-    prediction_hour = current_date.ceil('h') + timedelta(hours=1)
-    predictions["pickup_hour"] = prediction_hour
+    # Set pickup_hour to the most recent actual hour (same as notebook)
+    predictions["pickup_hour"] = recent_hour
     
     # Create or retrieve the feature group for this model's predictions
     feature_group = feature_store.get_or_create_feature_group(
