@@ -99,14 +99,17 @@ with st.sidebar:
     selected_station = st.selectbox("Select a Station:", ["All Stations"] + stations)
 
 # Fetch next-hour predictions for the selected model
+expected_next_hour = (current_date_est + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
 with st.spinner(f"Fetching predictions for {selected_model_display}..."):
     predictions, prediction_time = fetch_next_hour_predictions(feature_group_name)
     if predictions is not None and not predictions.empty:
         predictions['pickup_hour'] = predictions['pickup_hour'].apply(convert_to_est)
         predictions['pickup_hour'] = predictions['pickup_hour'].dt.strftime('%Y-%m-%d %H:%M:%S')
         prediction_time = convert_to_est(prediction_time).strftime('%Y-%m-%d %H:%M:%S')
+        if prediction_time != expected_next_hour.strftime('%Y-%m-%d %H:%M:%S'):
+            st.warning(f"Predictions for the next hour ({expected_next_hour.strftime('%Y-%m-%d %H:%M:%S')} EST) are unavailable. Showing most recent predictions from {prediction_time} EST.")
     else:
-        st.warning(f"No predictions available for the next hour (ending at {(current_date_est + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0).strftime('%Y-%m-%d %H:%M:%S')} EST).")
+        st.warning(f"No predictions available for the next hour (ending at {expected_next_hour.strftime('%Y-%m-%d %H:%M:%S')} EST).")
         predictions = pd.DataFrame()
         prediction_time = None
 
@@ -147,7 +150,7 @@ if not filtered_predictions.empty:
 
     st.subheader("Predicted vs Actual Demand Over Past 2 Weeks")
     if selected_station == "All Stations":
-        top_stations = filtered_predictions.sort_values("predicted_rides", ascending=False).head(3)  # Changed to top 3
+        top_stations = filtered_predictions.sort_values("predicted_rides", ascending=False).head(3)
         for _, row in top_stations.iterrows():
             station_name = row["start_station_name"]
             location_historical = filtered_historical[filtered_historical["start_station_name"] == station_name].copy()
