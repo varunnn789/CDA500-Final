@@ -189,11 +189,16 @@ def fetch_next_hour_predictions(feature_group_name):
     if fg is None:
         raise ValueError(f"Feature group {feature_group_name} not found in the feature store.")
     df = fg.read()
-    # Then filter for next hour in the DataFrame
-    df = df[df["pickup_hour"] == next_hour]
+    if df.empty:
+        return df
+    # Sort by pickup_hour in descending order and take the most recent predictions
+    df = df.sort_values("pickup_hour", ascending=False)
+    most_recent_hour = df["pickup_hour"].iloc[0]
+    df = df[df["pickup_hour"] == most_recent_hour]
 
     print(f"Current UTC time: {now}")
-    print(f"Next hour: {next_hour}")
+    print(f"Expected next hour: {next_hour}")
+    print(f"Most recent prediction hour: {most_recent_hour}")
     print(f"Found {len(df)} records for {feature_group_name}")
     return df
 

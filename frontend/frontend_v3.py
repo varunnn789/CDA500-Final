@@ -1,10 +1,8 @@
 import sys
 from pathlib import Path
 import os
-import folium
 import pandas as pd
 import streamlit as st
-from streamlit_folium import st_folium
 from datetime import datetime, timedelta
 import pytz
 import plotly.express as px
@@ -22,77 +20,6 @@ def convert_to_est(utc_time):
     if utc_time.tzinfo is None:
         utc_time = pytz.utc.localize(utc_time)
     return utc_time.astimezone(est_tz)
-
-# Function to fetch station coordinates (assumed to be in a static file or feature store)
-def fetch_station_coordinates():
-    # Placeholder: Fetch coordinates from a static file or feature store
-    try:
-        # Example: Load from a static CSV file in DATA_DIR
-        stations_file = DATA_DIR / "citi_bike_stations.csv"
-        if stations_file.exists():
-            stations_df = pd.read_csv(stations_file)
-            return stations_df[["start_station_name", "latitude", "longitude"]]
-        else:
-            # Fallback: Fetch from feature store
-            fs = get_feature_store()
-            fg = fs.get_feature_group(name="recent_time_series_hourly_feature_group", version=1)
-            df = fg.read()
-            if "latitude" in df.columns and "longitude" in df.columns:
-                stations_df = df[["start_station_name", "latitude", "longitude"]].drop_duplicates()
-                return stations_df
-            else:
-                raise ValueError("Station coordinates not found in feature store or static file.")
-    except Exception as e:
-        st.error(f"Error fetching station coordinates: {e}")
-        return None
-
-# Function to create a map with station markers colored by predicted rides
-def create_bike_map(predictions, stations_df, selected_station=None):
-    if stations_df is None or stations_df.empty:
-        return None
-
-    # Merge predictions with station coordinates
-    merged_df = pd.merge(
-        predictions[["start_station_name", "predicted_rides"]],
-        stations_df,
-        on="start_station_name",
-        how="left"
-    )
-    merged_df = merged_df.dropna(subset=["latitude", "longitude"])  # Drop stations without coordinates
-    merged_df["predicted_rides"] = merged_df["predicted_rides"].fillna(0)
-
-    # Create a Folium map centered on NYC
-    m = folium.Map(location=[40.7128, -74.0060], zoom_start=12, tiles="cartodbpositron")
-
-    # Create a color scale for predicted rides
-    min_rides = merged_df["predicted_rides"].min()
-    max_rides = merged_df["predicted_rides"].max()
-    if max_rides == min_rides:
-        max_rides = min_rides + 1  # Avoid division by zero
-    color_scale = lambda x: f"#{int(255 * (x - min_rides) / (max_rides - min_rides)):02x}00{int(255 * (1 - (x - min_rides) / (max_rides - min_rides))):02x}"
-
-    # Add markers for each station
-    for _, row in merged_df.iterrows():
-        station_name = row["start_station_name"]
-        predicted_rides = row["predicted_rides"]
-        lat = row["latitude"]
-        lon = row["longitude"]
-        color = color_scale(predicted_rides)
-        border_color = "green" if selected_station == station_name else "black"
-        border_weight = 3 if selected_station == station_name else 1
-
-        folium.CircleMarker(
-            location=[lat, lon],
-            radius=8,
-            color=border_color,
-            weight=border_weight,
-            fill=True,
-            fill_color=color,
-            fill_opacity=0.7,
-            tooltip=f"Station: {station_name}<br>Predicted Rides: {predicted_rides:.0f}",
-        ).add_to(m)
-
-    return m
 
 # Custom CSS for beautification
 st.markdown("""
@@ -151,13 +78,12 @@ with st.sidebar:
     selected_model = st.selectbox("Select Model:", models, index=0)
     feature_group_name = prediction_feature_groups[selected_model]
 
-    # Fetch stations for selection
+    # Fetch stations for selection (without coordinates, just names)
     with st.spinner("Fetching station data..."):
-        stations_df = fetch_station_coordinates()
-        if stations_df is not None:
-            stations = sorted(stations_df["start_station_name"].unique())
-        else:
-            stations = []
+        fs = get_feature_store()
+        fg = fs.get_feature_group(name="recent_time_series_hourly_feature_group", version=1)
+        df = fg.read()
+        stations = sorted(df["start_station_name"].unique())
 
     selected_station = st.selectbox("Select a Station:", ["All Stations"] + stations)
 
@@ -172,7 +98,7 @@ with st.spinner(f"Fetching predictions for {selected_model}..."):
         predictions['pickup_hour'] = predictions['pickup_hour'].apply(convert_to_est)
         predictions['pickup_hour'] = predictions['pickup_hour'].dt.strftime('%Y-%m-%d %H:%M:%S')
     else:
-        st.warning("No predictions available for the next hour.")
+        st.warning("No predictions available for the selected time.")
         predictions = pd.DataFrame()
 
 # Filter predictions based on the selected station
@@ -180,17 +106,6 @@ if selected_station != "All Stations":
     filtered_predictions = predictions[predictions['start_station_name'] == selected_station].copy()
 else:
     filtered_predictions = predictions.copy()
-
-# Display map
-if stations_df is not None and not filtered_predictions.empty:
-    st.subheader("Citi Bike Demand Predictions Map")
-    map_obj = create_bike_map(filtered_predictions, stations_df, selected_station if selected_station != "All Stations" else None)
-    if map_obj:
-        st_folium(map_obj, width=800, height=600, returned_objects=[])
-    else:
-        st.warning("Unable to display map due to missing station coordinates.")
-else:
-    st.warning("Map cannot be displayed: No predictions or station coordinates available.")
 
 # Display prediction statistics
 if not filtered_predictions.empty:
