@@ -53,16 +53,25 @@ current_date = pd.Timestamp.now(tz="Etc/UTC")
 current_date_est = convert_to_est(current_date)
 
 st.title("Citi Bike Demand Prediction - Next Hour")
-st.header(f'{current_date_est.strftime("%Y-%m-%d %H:%M:%S")} EST')
+st.header(f'Current Time: {current_date_est.strftime("%Y-%m-%d %H:%M:%S")} EST')
 
 # Define the list of models and corresponding feature group names
-models = [
+model_names = [
     "baseline_previous_hour",
     "lightgbm_28days_lags",
     "lightgbm_top10_features",
     "gradient_boosting_temporal_features",
     "lightgbm_enhanced_lags_cyclic_temporal_interactions"
 ]
+
+# Map technical model names to user-friendly display names
+model_display_names = {
+    "baseline_previous_hour": "Baseline Previous Hour",
+    "lightgbm_28days_lags": "LightGBM 28 Days Lags",
+    "lightgbm_top10_features": "LightGBM Top 10 Features",
+    "gradient_boosting_temporal_features": "Gradient Boosting Temporal Features",
+    "lightgbm_enhanced_lags_cyclic_temporal_interactions": "LightGBM Enhanced Lags Cyclic Temporal Interactions"
+}
 
 prediction_feature_groups = {
     "baseline_previous_hour": "predictions_model_baseline",
@@ -75,7 +84,9 @@ prediction_feature_groups = {
 # Sidebar: Model and station selection
 with st.sidebar:
     st.header("Settings")
-    selected_model = st.selectbox("Select Model:", models, index=0)
+    selected_model_display = st.selectbox("Select Model:", list(model_display_names.values()), index=0)
+    # Map display name back to technical name
+    selected_model = [k for k, v in model_display_names.items() if v == selected_model_display][0]
     feature_group_name = prediction_feature_groups[selected_model]
 
     # Fetch stations for selection (without coordinates, just names)
@@ -87,19 +98,15 @@ with st.sidebar:
 
     selected_station = st.selectbox("Select a Station:", ["All Stations"] + stations)
 
-    # Button to remove station filter
-    if st.button("Remove Station Filter"):
-        selected_station = "All Stations"
-
 # Fetch next-hour predictions for the selected model
-with st.spinner(f"Fetching predictions for {selected_model}..."):
+with st.spinner(f"Fetching predictions for {selected_model_display}..."):
     predictions, prediction_time = fetch_next_hour_predictions(feature_group_name)
     if predictions is not None and not predictions.empty:
         predictions['pickup_hour'] = predictions['pickup_hour'].apply(convert_to_est)
         predictions['pickup_hour'] = predictions['pickup_hour'].dt.strftime('%Y-%m-%d %H:%M:%S')
         prediction_time = convert_to_est(prediction_time).strftime('%Y-%m-%d %H:%M:%S')
     else:
-        st.warning("No predictions available for the selected time.")
+        st.warning(f"No predictions available for the next hour (ending at {(current_date_est + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0).strftime('%Y-%m-%d %H:%M:%S')} EST).")
         predictions = pd.DataFrame()
         prediction_time = None
 
@@ -140,7 +147,7 @@ if not filtered_predictions.empty:
 
     st.subheader("Predicted vs Actual Demand Over Past 2 Weeks")
     if selected_station == "All Stations":
-        top_stations = filtered_predictions.sort_values("predicted_rides", ascending=False).head(2)
+        top_stations = filtered_predictions.sort_values("predicted_rides", ascending=False).head(3)  # Changed to top 3
         for _, row in top_stations.iterrows():
             station_name = row["start_station_name"]
             location_historical = filtered_historical[filtered_historical["start_station_name"] == station_name].copy()
@@ -188,10 +195,5 @@ if not filtered_predictions.empty:
                 name='Next Hour Prediction'
             ))
         st.plotly_chart(fig, theme="streamlit", use_container_width=True)
-
-    # Top 10 stations
-    top10 = filtered_predictions.sort_values("predicted_rides", ascending=False).head(10)
-    st.subheader("Top 10 Stations by Predicted Rides")
-    st.dataframe(top10[["start_station_name", "predicted_rides"]])
 else:
     st.warning("No predictions available to display.")

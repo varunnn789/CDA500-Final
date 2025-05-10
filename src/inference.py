@@ -195,11 +195,7 @@ def fetch_next_hour_predictions(feature_group_name):
     # Filter for the exact next hour
     df_next = df[df["pickup_hour"] == next_hour]
     if df_next.empty:
-        # If no predictions for the next hour, fall back to the most recent
-        df = df.sort_values("pickup_hour", ascending=False)
-        most_recent_hour = df["pickup_hour"].iloc[0]
-        df_next = df[df["pickup_hour"] == most_recent_hour]
-        return df_next, most_recent_hour
+        return df_next, None
     return df_next, next_hour
 
 def fetch_predictions(hours, feature_group_name):
