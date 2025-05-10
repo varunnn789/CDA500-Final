@@ -10,7 +10,7 @@ from src.inference import (
 )
 
 # Get the current datetime
-current_date = pd.to_datetime(datetime.now(tz="Etc/UTC"))
+current_date = pd.Timestamp.now(tz="Etc/UTC")
 feature_store = get_feature_store()
 
 # Read time-series data from the feature store

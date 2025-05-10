@@ -107,9 +107,9 @@ with st.spinner(f"Fetching predictions for {selected_model_display}..."):
         predictions['pickup_hour'] = predictions['pickup_hour'].dt.strftime('%Y-%m-%d %H:%M:%S')
         prediction_time = convert_to_est(prediction_time).strftime('%Y-%m-%d %H:%M:%S')
         if prediction_time != expected_next_hour.strftime('%Y-%m-%d %H:%M:%S'):
-            st.warning(f"Predictions for the next hour ({expected_next_hour.strftime('%Y-%m-%d %H:%M:%S')} EST) are unavailable. Showing most recent predictions from {prediction_time} EST.")
+            st.warning(f"Predictions for the next hour ({expected_next_hour.strftime('%Y-%m-%d %H:%M:%S')} EST) are unavailable. Showing predictions for {prediction_time} EST.")
     else:
-        st.warning(f"No predictions available for the next hour (ending at {expected_next_hour.strftime('%Y-%m-%d %H:%M:%S')} EST).")
+        st.warning(f"No predictions available in the feature store. Please ensure the inference pipeline is running correctly.")
         predictions = pd.DataFrame()
         prediction_time = None
 
