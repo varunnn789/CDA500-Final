@@ -211,6 +211,8 @@ def fetch_predictions(hours, feature_group_name):
         raise ValueError(f"Feature group {feature_group_name} not found in the feature store.")
 
     df = fg.filter(fg.pickup_hour >= current_hour).read()
+    # Sort by pickup_hour in ascending order
+    df = df.sort_values("pickup_hour", ascending=True)
 
     return df
 
@@ -223,7 +225,11 @@ def fetch_hourly_rides(hours):
     query = fg.select_all()
     query = query.filter(fg.pickup_hour >= current_hour)
 
-    return query.read()
+    df = query.read()
+    # Sort by pickup_hour in ascending order
+    df = df.sort_values("pickup_hour", ascending=True)
+
+    return df
 
 def fetch_days_data(days):
     current_date = pd.to_datetime(datetime.now(timezone.utc))
