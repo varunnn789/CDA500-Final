@@ -52,7 +52,7 @@ st.markdown("""
 current_date = pd.Timestamp.now(tz="Etc/UTC")
 current_date_est = convert_to_est(current_date)
 
-st.title("Citi Bike Demand Prediction - Next Hour")
+st.title("Citi Bike Demand Prediction - Latest Hour")
 st.header(f'Current Time: {current_date_est.strftime("%Y-%m-%d %H:%M:%S")} EST')
 
 # Define the list of models and corresponding feature group names
@@ -98,16 +98,13 @@ with st.sidebar:
 
     selected_station = st.selectbox("Select a Station:", ["All Stations"] + stations)
 
-# Fetch next-hour predictions for the selected model
-expected_next_hour = (current_date_est + timedelta(hours=1)).replace(minute=0, second=0, microsecond=0)
+# Fetch most recent predictions for the selected model
 with st.spinner(f"Fetching predictions for {selected_model_display}..."):
     predictions, prediction_time = fetch_next_hour_predictions(feature_group_name)
     if predictions is not None and not predictions.empty:
         predictions['pickup_hour'] = predictions['pickup_hour'].apply(convert_to_est)
         predictions['pickup_hour'] = predictions['pickup_hour'].dt.strftime('%Y-%m-%d %H:%M:%S')
         prediction_time = convert_to_est(prediction_time).strftime('%Y-%m-%d %H:%M:%S')
-        if prediction_time != expected_next_hour.strftime('%Y-%m-%d %H:%M:%S'):
-            st.warning(f"Predictions for the next hour ({expected_next_hour.strftime('%Y-%m-%d %H:%M:%S')} EST) are unavailable. Showing predictions for {prediction_time} EST.")
     else:
         st.warning(f"No predictions available in the feature store. Please ensure the inference pipeline is running correctly.")
         predictions = pd.DataFrame()
@@ -134,10 +131,13 @@ else:
     filtered_predictions = predictions.copy()
     filtered_historical = historical_data.copy()
 
+# Calculate the ceiling of the current time for display
+displayed_prediction_time = current_date_est.ceil('h').strftime('%Y-%m-%d %H:%M:%S')
+
 # Display prediction statistics
 if not filtered_predictions.empty:
     st.subheader("Prediction Statistics")
-    st.write(f"Prediction Time: {prediction_time} EST")
+    st.write(f"Prediction Time: {displayed_prediction_time} EST")  # Show ceiling of current time
     col1, col2, col3 = st.columns(3)
     with col1:
         st.metric("Average Predicted Rides", f"{filtered_predictions['predicted_rides'].mean():.0f}")
@@ -165,14 +165,14 @@ if not filtered_predictions.empty:
                 labels={'pickup_hour': 'Time (EST)', 'value': 'Rides', 'variable': 'Data Type'},
                 line_shape='linear'
             )
-            # Add marker for the most recent prediction
+            # Add marker for the most recent prediction (using actual prediction time)
             if not location_pred.empty:
                 fig.add_trace(go.Scatter(
                     x=[location_pred['pickup_hour'].iloc[-1]],
                     y=[location_pred['predicted_rides'].iloc[-1]],
                     mode='markers',
                     marker=dict(color='red', symbol='x', size=10),
-                    name='Next Hour Prediction'
+                    name='Latest Prediction'
                 ))
             st.plotly_chart(fig, theme="streamlit", use_container_width=True)
     else:
@@ -188,14 +188,14 @@ if not filtered_predictions.empty:
             labels={'pickup_hour': 'Time (EST)', 'value': 'Rides', 'variable': 'Data Type'},
             line_shape='linear'
         )
-        # Add marker for the most recent prediction
+        # Add marker for the most recent prediction (using actual prediction time)
         if not location_pred.empty:
             fig.add_trace(go.Scatter(
                 x=[location_pred['pickup_hour'].iloc[-1]],
                 y=[location_pred['predicted_rides'].iloc[-1]],
                 mode='markers',
                 marker=dict(color='red', symbol='x', size=10),
-                name='Next Hour Prediction'
+                name='Latest Prediction'
             ))
         st.plotly_chart(fig, theme="streamlit", use_container_width=True)
 else:
