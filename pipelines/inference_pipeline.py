@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 
 import pandas as pd
-
+from src.inference import BaselineModelPreviousHour
 import src.config as config
 from src.inference import (
     get_feature_store,
