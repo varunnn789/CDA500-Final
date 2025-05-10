@@ -68,13 +68,13 @@ for model_name in models:
     # Load the model
     model = load_model_from_registry(model_name=model_name)
     
-    # Preprocess features: Drop non-numeric columns for models that require numeric input
-    features_for_model = features_next_hour.copy()
+    # Prepare features: Drop non-numeric columns for models that require numeric input
+    numeric_features = features_next_hour.copy()
     if model_name != "baseline_previous_hour":  # baseline_previous_hour handles features differently
-        features_for_model = features_for_model.drop(columns=["pickup_hour", "start_station_name"])
+        numeric_features = numeric_features.drop(columns=["pickup_hour", "start_station_name"])
     
     # Make predictions for the most recent hour
-    predictions = get_model_predictions(model, features_for_model, model_name=model_name)
+    predictions = get_model_predictions(model, features_next_hour, numeric_features, model_name=model_name)
     predictions["pickup_hour"] = recent_hour  # Use the most recent actual hour
     
     # Create or retrieve the feature group for this model's predictions
