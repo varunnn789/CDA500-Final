@@ -1,12 +1,13 @@
 from datetime import datetime, timedelta
 
 import pandas as pd
-from src.inference import BaselineModelPreviousHour
+
 import src.config as config
 from src.inference import (
     get_feature_store,
     get_model_predictions,
     load_model_from_registry,
+    BaselineModelPreviousHour,  # Added missing import
 )
 
 # Get the current datetime
@@ -75,8 +76,8 @@ for model_name in models:
     
     # Make predictions for the most recent hour
     predictions = get_model_predictions(model, features_next_hour, features_for_model, model_name=model_name)
-    # Set pickup_hour to the next hour after the most recent hour
-    prediction_hour = pd.to_datetime(recent_hour) + timedelta(hours=1)
+    # Set pickup_hour to the next hour after the current time
+    prediction_hour = current_date.ceil('h') + timedelta(hours=1)
     predictions["pickup_hour"] = prediction_hour
     
     # Create or retrieve the feature group for this model's predictions
